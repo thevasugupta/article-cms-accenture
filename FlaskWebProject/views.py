@@ -77,23 +77,34 @@ def login():
     auth_url = _build_auth_url(scopes=Config.SCOPE, state=session["state"])
     return render_template('login.html', title='Sign In', form=form, auth_url=auth_url)
 
-@app.route(Config.REDIRECT_PATH)  # Its absolute URL must match your app's redirect_uri set in AAD
+#@app.route(Config.REDIRECT_PATH)  # Its absolute URL must match your app's redirect_uri set in AAD
+@app.route("/getAToken")
 def authorized():
     if request.args.get('state') != session.get("state"):
         return redirect(url_for("home"))  # No-OP. Goes back to Index page
-    if "error" in request.args:  # Authentication/Authorization failure
+    if "error" in request.args:
+        logging.warning("Invalid login attempt via Microsoft (AAD error)")
+# Authentication/Authorization failure
         return render_template("auth_error.html", result=request.args)
     if request.args.get('code'):
         cache = _load_cache()
-        # TODO: Acquire a token from a built msal app, along with the appropriate redirect URI
-        result = None
+        msal_app = _build_msal_app(cache=cache)
+
+result = msal_app.acquire_token_by_authorization_code(
+    request.args['code'],
+    scopes=Config.SCOPE,
+    redirect_uri=url_for("authorized", _external=True)
+)
+
         if "error" in result:
+            logging.warning("Invalid login attempt via Microsoft (token failure)")
             return render_template("auth_error.html", result=result)
         session["user"] = result.get("id_token_claims")
         # Note: In a real app, we'd use the 'name' property from session["user"] below
         # Here, we'll use the admin username for anyone who is authenticated by MS
         user = User.query.filter_by(username="admin").first()
         login_user(user)
+        logging.info("admin logged in successfully via Microsoft")
         _save_cache(cache)
     return redirect(url_for('home'))
 
@@ -121,8 +132,17 @@ def _save_cache(cache):
 
 def _build_msal_app(cache=None, authority=None):
     # TODO: Return a ConfidentialClientApplication
-    return None
+    return msal.ConfidentialClientApplication(
+        client_id=CLIENT_ID,
+        authority=AUTHORITY,
+        client_credential=CLIENT_SECRET,
+        token_cache=cache
+    )
 
 def _build_auth_url(authority=None, scopes=None, state=None):
-    # TODO: Return the full Auth Request URL with appropriate Redirect URI
-    return None
+    return _build_msal_app(authority=authority).get_authorization_request_url(
+        scopes or [],
+        state=state,
+        redirect_uri=url_for("authorized", _external=True)
+    )
+
